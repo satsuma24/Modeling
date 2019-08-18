@@ -1,0 +1,86 @@
+---
+title: "Machine Learning Modeling of Google store customer analytics"
+output:
+  html_notebook: default
+  html_document: default
+---
+
+The Kaggle competition notebook of modeling part:
+
+#Intro of the Light gbm used in the competition
+
+LightGBM is a gradient boosting framework that uses tree based learning algorithms. It is designed to be distributed and efficient with the following advantages:
+
+Faster training speed and higher efficiency.
+Lower memory usage.
+Better accuracy.
+Support of parallel and GPU learning.
+Capable of handling large-scale data.
+
+#Light gbm in our use case
+
+In our competition, we choose the lightGBM as our main machine learning model to forecast the customers' total reveune in the time window of 2018/12/01 to 2019/01/31.
+
+Initial steps includes transforming the original training and test datasets into light gbm predefined dataset format to ensure the training process seamlessly.
+
+```{r}
+dtrain_all <- lgb.Dataset(as.matrix(train[-c(1,39,40)]),label = train$ret)
+dtrain_ret <- lgb.Dataset(as.matrix(train[-c(1,39,40)][train$ret == 1,]),label = train[train$ret == 1,]$target)
+pr_lgb_sum = 0
+message("Training and predictions")
+
+```
+
+After the the dataset has been set up, let's begin our training job and predicting the reveune.
+
+In order to forecast the total revenue of each customer, we designed and implemented a stack prediction model:
+
+1. the first layer of it is classifier that predict whether the customer will purchase the item or not.
+
+2. the second layer of it is the regressor that predict how much the customer will purchase in the store.
+
+The final forecast result is calculated by the classifier result multiply the regressor.
+
+In order to generalize the prediction results, we train the model 10 times with different bagging starting seeds and feature starting seeds to ensure the randomness of the models and use the models to predict the final results.
+
+```{r}
+
+###Parameters of "isReturned" classificator 
+param_lgb2 = list(objective = "binary",
+                  max_bin = 256,
+                  learning_rate = 0.01,
+                  num_leaves = 15,
+                  bagging_fraction = 0.9,
+                  feature_fraction = 0.8,
+                  min_data = 1,
+                  bagging_freq = 1,
+                  metric = "binary_logloss")
+
+###Parameters of "How_Much_Returned_Will_Pay" regressor
+param_lgb3= list(objective = "regression",
+                 max_bin = 256,
+                 learning_rate = 0.01,
+                 num_leaves = 9,
+                 bagging_fraction = 0.9,
+                 feature_fraction = 0.8,
+                 min_data = 1,
+                 bagging_freq = 1,
+                 metric = "rmse")
+
+###Training and prediction of models: Averaging of 10 [Classificator*Regressor] values
+for (i in c(1:10)) {
+  message("Iteration number ", i)
+  lgb_model1 = lgb.train(dtrain_all, params = param_lgb2, nrounds = 1200, bagging_seed = 13 + i, feature_fraction_seed = 42 + i)
+  pr_lgb = predict(lgb_model1, as.matrix(test[c(names(train[-c(1,39,40)]))]))
+  lgb_model2 = lgb.train(dtrain_ret, params = param_lgb3, nrounds = 368, bagging_seed = 42 + i, feature_fraction_seed = 13 + i)
+  pr_lgb_ret = predict(lgb_model2, as.matrix(test[c(names(train[-c(1,39,40)]))]))
+  pr_lgb_sum = pr_lgb_sum + pr_lgb*pr_lgb_ret
+}
+pr_final2 = pr_lgb_sum/10
+
+###Writing final predictions into csv
+summary(pr_final2)
+newsub4 = data.frame(fullVisitorId = test$fullVisitorId, PredictedLogRevenue = pr_final2)
+write.csv(newsub4, "tst4.csv", row.names = FALSE, quote = FALSE)
+```
+
